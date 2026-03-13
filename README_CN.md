@@ -21,7 +21,46 @@
 - 详细隔离验证脚本
 - OpenClaw 插件集成配置
 
-### 3. 源代码整理
+### 3. API 调用优化
+
+针对 OpenViking API 调用浪费严重的问题（发现时浪费 92.2%），进行了以下优化：
+
+#### 3.1 Embedding API 优化
+
+- **统一接口 + 缓存层**
+- 实现位置：`openviking/utils/vector_cache.py`
+- 核心功能：
+  - 缓存查找 - 避免重复 API 调用
+  - 并发控制 - 相同内容只调用 1 次 API
+  - 限流控制 - 最多 10 个并发 API 调用
+  - 线程安全 - finally 块保证异常时清理资源
+
+#### 3.2 VLM API 优化
+
+- 底层统一统计
+- 实现位置：`openviking/models/vlm/backends/volcengine_vlm.py`
+
+#### 3.3 统计监控
+
+- 实时监控脚本：`watch_stats.sh`
+- 单次查询：`check_stats.sh`
+- API 查询：
+  ```bash
+  curl http://127.0.0.1:1933/api/v1/admin/stats \
+    -H "Authorization: Bearer test-root-key-2024"
+  ```
+
+#### 3.4 配置参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `vector_cache_size` | 1000 | 最大缓存条目数 |
+| `vector_cache_ttl` | 3600 | 缓存过期时间 (秒) |
+| `MAX_CONCURRENT_EMBEDDING` | 10 | 最大并发 API 调用数 |
+
+配置位置：`openviking.config.cache`
+
+### 4. 源代码整理
 
 - 清理编译产物（build/ 目录）
 - 保留核心源代码
