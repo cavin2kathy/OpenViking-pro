@@ -84,11 +84,13 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-
+        from openviking.extention.stats_collector import StatsCollector
+        stats = StatsCollector()
         last_error = None
         for attempt in range(max_retries + 1):
             try:
                 response = await client.chat.completions.create(**kwargs)
+                stats.record_vlm_api_call()
                 self._update_token_usage_from_response(response)
                 return response.choices[0].message.content or ""
             except Exception as e:

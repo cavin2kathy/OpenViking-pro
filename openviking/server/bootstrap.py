@@ -129,6 +129,14 @@ def main():
 
     # Configure logging for Uvicorn
     configure_uvicorn_logging()
+    print("Initializing vector cache...")
+    try:
+        from openviking.extention.vector_cache import get_vector_cache
+
+        cache = get_vector_cache()
+        print(f"Loaded {cache.get_stats()['size']} vectors from cache files")
+    except Exception as e:
+        print(f"Warning: Failed to load vector cache: {e}")
 
     # Create and run app
     app = create_app(config)

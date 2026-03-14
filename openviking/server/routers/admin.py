@@ -220,3 +220,11 @@ async def regenerate_key(
     manager = _get_api_key_manager(request)
     new_key = await manager.regenerate_key(account_id, user_id)
     return Response(status="ok", result={"user_key": new_key})
+
+
+@router.get("/stats")
+async def get_statistics():
+    from openviking.extention.stats_collector import get_stats_collector
+
+    stats = get_stats_collector()
+    return stats.get_stats()

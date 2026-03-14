@@ -71,6 +71,7 @@ class OpenAIVLM(VLMBase):
         self, prompt: str, thinking: bool = False, max_retries: int = 0
     ) -> str:
         """Get text completion asynchronously"""
+        from openviking.extention.stats_collector import get_stats_collector
         client = self.get_async_client()
         kwargs = {
             "model": self.model or "gpt-4o-mini",
@@ -83,6 +84,7 @@ class OpenAIVLM(VLMBase):
             try:
                 response = await client.chat.completions.create(**kwargs)
                 self._update_token_usage_from_response(response)
+                get_stats_collector().record_vlm_api_call()
                 return response.choices[0].message.content or ""
             except Exception as e:
                 last_error = e

@@ -1,5 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import asyncio
+import threading
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -242,6 +244,40 @@ class EmbeddingConfig(BaseModel):
         params = param_builder(config)
         return embedder_class(**params)
 
+    class CachedEmbedderProxy:
+        def __init__(self, embedder):
+            self._embedder = embedder
+
+        def __getattr__(self, name: str):
+            return getattr(self._embedder, name)
+
+        def embed(self, text: str):
+            from openviking.extention.vector_cache import get_embedding
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(get_embedding(text, self._embedder))
+
+            result: dict[str, Any] = {}
+            error: dict[str, Exception] = {}
+
+            def _run():
+                try:
+                    result["value"] = asyncio.run(get_embedding(text, self._embedder))
+                except Exception as exc:
+                    error["value"] = exc
+
+            thread = threading.Thread(target=_run)
+            thread.start()
+            thread.join()
+
+            if "value" in error:
+                raise error["value"]
+            return result["value"]
+
+        def embed_batch(self, texts):
+            return [self.embed(text) for text in texts]
     def get_embedder(self):
         """Get embedder instance based on configuration.
 
@@ -254,17 +290,19 @@ class EmbeddingConfig(BaseModel):
         from openviking.models.embedder import CompositeHybridEmbedder
 
         if self.hybrid:
-            return self._create_embedder(self.hybrid.provider.lower(), "hybrid", self.hybrid)
+            base_embedder = self._create_embedder(self.hybrid.provider.lower(), "hybrid", self.hybrid)
+            return self.CachedEmbedderProxy(base_embedder)
 
         if self.dense and self.sparse:
             dense_embedder = self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
             sparse_embedder = self._create_embedder(
                 self.sparse.provider.lower(), "sparse", self.sparse
             )
-            return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
+            return self.CachedEmbedderProxy(CompositeHybridEmbedder(dense_embedder, sparse_embedder))
 
         if self.dense:
-            return self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
+            base_embedder = self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
+            return self.CachedEmbedderProxy(base_embedder)
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
 
