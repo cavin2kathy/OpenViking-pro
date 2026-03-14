@@ -138,11 +138,9 @@ class VectorCache:
             logger.error(f"Failed to persist: {e}")
     
     def _compute_key(self, content: str) -> str:
-        return hashlib.md5(content.encode('utf-8')).hexdigest()
+        return hashlib.md5(content.encode("utf-8")).hexdigest()
     
-    def get(self, content: str) -> Optional[Dict]:
-        key = self._compute_key(content)
-        
+    def get_by_key(self, key: str) -> Optional[Dict]:
         if key in self._cache:
             vector, sparse_vector, timestamp = self._cache[key]
             # 缓存命中时更新访问时间（保护热点数据不被淘汰）
@@ -152,9 +150,14 @@ class VectorCache:
         
         self._misses += 1
         return None
-    
-    async def set(self, content: str, vector: List[float], sparse_vector: Optional[Dict] = None):
+
+    def get(self, content: str) -> Optional[Dict]:
         key = self._compute_key(content)
+        return self.get_by_key(key)
+    
+    async def set_by_key(
+        self, key: str, content: str, vector: List[float], sparse_vector: Optional[Dict] = None
+    ):
         timestamp = time.time()
         
         async with self._lock:
@@ -181,6 +184,15 @@ class VectorCache:
             self._persisted_keys.add(key)
         
         logger.debug(f"Cached vector for content hash {key[:8]}")
+
+    async def set(
+        self,
+        content: str,
+        vector: List[float],
+        sparse_vector: Optional[Dict] = None,
+    ):
+        key = self._compute_key(content)
+        await self.set_by_key(key, content, vector, sparse_vector)
     
     def load_from_md(self, limit: Optional[int] = None):
         """Load vectors from MD files on startup (up to limit)"""
@@ -313,9 +325,10 @@ async def get_embedding(text: str, embedder) -> Any:
     stats.record_embedding_total_call()
     
     cache = get_vector_cache()
+    key = cache._compute_key(text)
     
     # ========== 第1次缓存检查 ==========
-    cached = cache.get(text)
+    cached = cache.get_by_key(key)
     if cached:
         stats.record_cache_hit()
         return EmbedResult(
@@ -323,25 +336,26 @@ async def get_embedding(text: str, embedder) -> Any:
             sparse_vector=cached.get("sparse_vector", {})
         )
     
-    # ========== 处理并发 ==========
-    async with cache._lock:
-        if text in cache._pending:
-            event = cache._pending[text]
-        else:
-            event = asyncio.Event()
-            cache._pending[text] = event
-    
-    # ========== 等待（如果有并发请求） ==========
-    if event.is_set():
-        # 已有请求完成，进行第2次检查
-        cached = cache.get(text)
+    event: asyncio.Event
+    owns_execution = False
+    while True:
+        cached = cache.get_by_key(key)
         if cached:
             stats.record_cache_hit()
             return EmbedResult(
                 dense_vector=cached["vector"],
                 sparse_vector=cached.get("sparse_vector", {})
             )
-        # 第2次未命中：直接调用API（可能重复，但简化逻辑）
+
+        async with cache._lock:
+            event = cache._pending.get(key)
+            if event is None:
+                event = asyncio.Event()
+                cache._pending[key] = event
+                owns_execution = True
+                break
+
+        await event.wait()
     
     # ========== 调用API ==========
     semaphore = _get_semaphore()
@@ -351,9 +365,10 @@ async def get_embedding(text: str, embedder) -> Any:
             stats.record_embedding_api_call()
             
             result = await asyncio.to_thread(embedder.embed, text)
-            await cache.set(text, result.dense_vector, result.sparse_vector)
+            await cache.set_by_key(key, text, result.dense_vector, result.sparse_vector)
             return result
     finally:
-        event.set()
-        async with cache._lock:
-            cache._pending.pop(text, None)
+        if owns_execution:
+            event.set()
+            async with cache._lock:
+                cache._pending.pop(key, None)

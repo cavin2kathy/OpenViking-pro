@@ -124,15 +124,8 @@ class MemoryDeduplicator:
 
         # Generate embedding for candidate
         query_text = f"{candidate.abstract} {candidate.content}"
-        
-        # Use unified interface (cache + concurrency control)
-        from openviking.utils.vector_cache import get_embedding
-        embed_result = await get_embedding(query_text, self.embedder)
+        embed_result: EmbedResult = self.embedder.embed(query_text)
         query_vector = embed_result.dense_vector
-        
-        # Save precomputed vectors to candidate for reuse (optimization)
-        candidate._precomputed_vector = query_vector
-        candidate._precomputed_sparse_vector = embed_result.sparse_vector
 
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
 

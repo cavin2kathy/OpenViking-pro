@@ -13,7 +13,6 @@ import json
 from typing import Any, Dict, Optional
 
 from openviking.models.embedder.base import EmbedResult
-from openviking.utils.stats_collector import get_stats_collector
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -165,8 +164,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         """Process dequeued message and add embedding vector(s)."""
         if not data:
             return None
-        
-        stats = get_stats_collector()
 
         try:
             queue_data = json.loads(data["data"])
@@ -185,48 +182,40 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self.report_success()
                 return data
 
-            # Check for precomputed vectors (optimization - vector reuse)
-            precomputed_vector = inserted_data.pop("_precomputed_vector", None)
-            precomputed_sparse = inserted_data.pop("_precomputed_sparse_vector", None)
-            
-            if precomputed_vector:
-                # Use precomputed vector
-                inserted_data["vector"] = precomputed_vector
-                if precomputed_sparse:
-                    inserted_data["sparse_vector"] = precomputed_sparse
-                logger.debug(f"Using precomputed vector for {inserted_data.get('uri')}")
-                stats.record_precomputed_vector_used()
+            # Initialize embedder if not already initialized
+            if not self._embedder:
+                from openviking_cli.utils.config import get_openviking_config
+
+                config = get_openviking_config()
+                self._initialize_embedder(config)
+
+            # Generate embedding vector(s)
+            if self._embedder:
+                # embed() is a blocking HTTP call; offload to thread pool to avoid
+                # blocking the event loop and allow real concurrency.
+                result: EmbedResult = await asyncio.to_thread(
+                    self._embedder.embed, embedding_msg.message
+                )
+
+                # Add dense vector
+                if result.dense_vector:
+                    inserted_data["vector"] = result.dense_vector
+                    # Validate vector dimension
+                    if len(result.dense_vector) != self._vector_dim:
+                        error_msg = f"Dense vector dimension mismatch: expected {self._vector_dim}, got {len(result.dense_vector)}"
+                        logger.error(error_msg)
+                        self.report_error(error_msg, data)
+                        return None
+
+                # Add sparse vector if present
+                if result.sparse_vector:
+                    inserted_data["sparse_vector"] = result.sparse_vector
+                    logger.debug(f"Generated sparse vector with {len(result.sparse_vector)} terms")
             else:
-                # Use unified interface (cache + concurrency control)
-                from openviking.utils.vector_cache import get_embedding
-                
-                # Initialize embedder if not already initialized
-                if not self._embedder:
-                    from openviking_cli.utils.config import get_openviking_config
-                    config = get_openviking_config()
-                    self._initialize_embedder(config)
-                
-                if self._embedder:
-                    # Use unified interface (cache + concurrency control)
-                    # Stats are recorded inside get_embedding()
-                    result = await get_embedding(embedding_msg.message, self._embedder)
-                    
-                    if result.dense_vector:
-                        inserted_data["vector"] = result.dense_vector
-                        if len(result.dense_vector) != self._vector_dim:
-                            error_msg = f"Dense vector dimension mismatch: expected {self._vector_dim}, got {len(result.dense_vector)}"
-                            logger.error(error_msg)
-                            self.report_error(error_msg, data)
-                            return None
-                    
-                    if result.sparse_vector:
-                        inserted_data["sparse_vector"] = result.sparse_vector
-                        logger.debug(f"Generated sparse vector with {len(result.sparse_vector)} terms")
-                else:
-                    error_msg = "Embedder not initialized, skipping vector generation"
-                    logger.warning(error_msg)
-                    self.report_error(error_msg, data)
-                    return None
+                error_msg = "Embedder not initialized, skipping vector generation"
+                logger.warning(error_msg)
+                self.report_error(error_msg, data)
+                return None
 
             # Write to vector database
             try:
