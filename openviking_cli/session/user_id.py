@@ -1,4 +1,3 @@
-import hashlib
 import re
 
 
@@ -51,7 +50,7 @@ class UserIdentifier(object):
 
     def agent_space_name(self) -> str:
         """Agent-level space name (user + agent)."""
-        return hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()[:12]
+        return self._user_id + self._agent_id
 
     def memory_space_uri(self) -> str:
         return f"viking://agent/{self.agent_space_name()}/memories"
