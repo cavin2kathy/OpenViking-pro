@@ -35,6 +35,9 @@
 - `openviking/server/routers/admin.py`
   - 保留 `/stats` 统计接口
   - 已去掉 `/stats/reset`
+- `openviking_cli/session/user_id.py`
+  - `agent_space_name()` 从 `md5(user_id + agent_id)[:12]` 改为直接 `user_id + agent_id`
+  - Agent 空间目录名不再使用哈希，改为可读拼接值
 
 ### 4) VLM 统计接入
 
