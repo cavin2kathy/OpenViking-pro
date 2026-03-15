@@ -50,7 +50,7 @@ class UserIdentifier(object):
 
     def agent_space_name(self) -> str:
         """Agent-level space name (user + agent)."""
-        return self._user_id + self._agent_id
+        return f"{self._user_id}_{self._agent_id}"
 
     def memory_space_uri(self) -> str:
         return f"viking://agent/{self.agent_space_name()}/memories"
